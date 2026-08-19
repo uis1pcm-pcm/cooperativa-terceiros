@@ -3,27 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import {
-  Timestamp,
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  limit,
-  orderBy,
-  query,
-  serverTimestamp,
-  updateDoc,
-} from "firebase/firestore";
-
 import { Field, FormRow } from "@/components/ui/form-controls";
 import { maskCnpjInput } from "@/lib/cnpj";
 import { dateOnlyToMillis, formatDateOnlyBR, maskDateOnlyInput, parseDateOnly } from "@/lib/dateOnly";
-import { tryGetFirestore } from "@/lib/firebase";
 import { useFirebaseAuthSession } from "@/lib/useFirebaseAuthSession";
-import { recordTelemetry } from "@/lib/telemetry";
-import { resolveReopenedProgress, snapshotBeforeConclusion } from "@/lib/serviceProgress";
-import { buildChecklistWeightMap, computeProgressFromEvents, type ProgressEvent } from "@/lib/progressHistory";
 
 type ChecklistDraft = Array<{ id: string; descricao: string; peso: number | "" }>;
 
@@ -87,15 +70,7 @@ function normaliseChecklistEntry(entry: unknown, index: number): ChecklistDraft[
 
 function toDateInput(value: unknown): string {
   if (!value) return "";
-  if (value instanceof Timestamp) {
-    const date = value.toDate();
-    if (!date || Number.isNaN(date.getTime())) return "";
-    return formatDateOnlyBR({
-      year: date.getUTCFullYear(),
-      month: date.getUTCMonth() + 1,
-      day: date.getUTCDate(),
-    });
-  }
+  if (typeof value === "number" && Number.isFinite(value)) value = new Date(value);
   if (typeof value === "string" && value) {
     const parsed = parseDateOnly(value);
     if (parsed) {
@@ -153,7 +128,6 @@ export default function ServiceEditorClient({ serviceId }: ServiceEditorClientPr
     pacoteId: "",
   });
   const [andamento, setAndamento] = useState(0);
-  const [previousProgress, setPreviousProgress] = useState<number | null>(null);
   const [withChecklist, setWithChecklist] = useState(false);
   const [checklist, setChecklist] = useState<ChecklistDraft>([]);
   const [saving, setSaving] = useState(false);
@@ -166,59 +140,13 @@ export default function ServiceEditorClient({ serviceId }: ServiceEditorClientPr
   const [editDateValue, setEditDateValue] = useState("");
   const [editPercentValue, setEditPercentValue] = useState("");
   const [savingUpdateEdit, setSavingUpdateEdit] = useState(false);
-  const { db: firestore, error: firestoreError } = useMemo(() => tryGetFirestore(), []);
-  const { ready: isAuthReady, issue: authIssue } = useFirebaseAuthSession();
+  const { ready: isAuthReady, issue: authIssue, user } = useFirebaseAuthSession();
 
-  const resolveMillis = useCallback((value: unknown): number | null => {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (value instanceof Date) {
-      const time = value.getTime();
-      return Number.isNaN(time) ? null : time;
-    }
-    if (typeof value === "string" && value.trim()) {
-      const parsed = new Date(value);
-      return Number.isNaN(parsed.getTime()) ? null : parsed.getTime();
-    }
-    if (value && typeof (value as { toMillis?: () => number }).toMillis === "function") {
-      const millis = (value as { toMillis: () => number }).toMillis();
-      return typeof millis === "number" && Number.isFinite(millis) ? millis : null;
-    }
-    if (value && typeof (value as { seconds?: number; nanoseconds?: number }).seconds === "number") {
-      const maybe = value as { seconds: number; nanoseconds?: number };
-      const millis = maybe.seconds * 1000 + Math.round((maybe.nanoseconds ?? 0) / 1_000_000);
-      return Number.isFinite(millis) ? millis : null;
-    }
-    return null;
-  }, []);
-
-  const recomputeProgressAfterEdit = useCallback(async () => {
-    try {
-      const response = await fetch("/api/pcm/servicos/recompute-progress", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ serviceId }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`failed_to_recompute:${response.status}`);
-      }
-
-      const json = (await response.json()) as { ok?: boolean; percent?: number };
-      if (json.ok && typeof json.percent === "number" && Number.isFinite(json.percent)) {
-        setAndamento(json.percent);
-      }
-    } catch (error) {
-      console.error("[servicos/:id] Falha ao recalcular andamento após edição", error);
-      toast.error("Não foi possível recalcular o andamento. Os valores podem ficar temporariamente desatualizados.");
-    }
-  }, [serviceId]);
-
-  useEffect(() => {
-    if (firestoreError) {
-      console.error("[servicos/:id] Firestore indisponível", firestoreError);
-      toast.error("Configuração de banco de dados indisponível.");
-    }
-  }, [firestoreError]);
+  const authenticatedFetch = useCallback(async (url: string, init?: RequestInit) => {
+    if (!user) throw new Error("Usuário não autenticado");
+    const token = await user.getIdToken();
+    return fetch(url, { ...init, headers: { ...init?.headers, Authorization: `Bearer ${token}` } });
+  }, [user]);
 
   const totalPeso = useMemo(
     () =>
@@ -230,178 +158,68 @@ export default function ServiceEditorClient({ serviceId }: ServiceEditorClientPr
     [checklist],
   );
 
-  const refreshUpdates = useCallback(
-    async (options?: { cancelledRef?: { current: boolean } }) => {
-      if (!firestore || !isAuthReady) return;
-      const cancelledRef = options?.cancelledRef;
-      setUpdatesLoading(true);
-      try {
-        const ref = doc(firestore, "services", serviceId);
-        const parseDate = (value: unknown): Date | null => {
-          if (value instanceof Timestamp) return value.toDate();
-          if (value && typeof (value as { toDate?: () => Date }).toDate === "function") {
-            return (value as { toDate: () => Date }).toDate();
-          }
-          if (typeof value === "number" && Number.isFinite(value)) {
-            const parsed = new Date(value);
-            return Number.isNaN(parsed.getTime()) ? null : parsed;
-          }
-          if (typeof value === "string" && value.trim()) {
-            const parsed = new Date(value);
-            return Number.isNaN(parsed.getTime()) ? null : parsed;
-          }
-          return null;
-        };
-
-        const mapUpdate = (
-          docSnap: Awaited<ReturnType<typeof getDocs>>["docs"][number],
-          source: UpdateHistoryItem["source"],
-        ): UpdateHistoryItem => {
-          const data = docSnap.data() ?? {};
-          const dateSource = data.date ?? data.reportDate ?? data.createdAt ?? (docSnap.metadata.hasPendingWrites ? null : docSnap.createTime);
-          const date = parseDate(dateSource);
-
-          const rawPercent =
-            typeof data.realPercentSnapshot === "number"
-              ? data.realPercentSnapshot
-              : typeof data.manualPercent === "number"
-                ? data.manualPercent
-                : typeof data.percent === "number"
-                  ? data.percent
-                  : typeof data.totalPct === "number"
-                    ? data.totalPct
-                    : undefined;
-
-          return {
-            id: docSnap.id,
-            date,
-            note: typeof data.note === "string" ? data.note : typeof data.description === "string" ? data.description : undefined,
-            totalPct: typeof rawPercent === "number" ? rawPercent : undefined,
-            items: Array.isArray(data.items) ? data.items : undefined,
-            source,
-          };
-        };
-
-        const [newUpdatesSnap, legacyUpdatesSnap] = await Promise.all([
-          getDocs(query(collection(ref, "updates"), orderBy("createdAt", "desc"), limit(50))),
-          getDocs(query(collection(ref, "serviceUpdates"), orderBy("date", "desc"), limit(50))),
-        ]);
-
-        const mapped: UpdateHistoryItem[] = [
-          ...newUpdatesSnap.docs.map((docSnap) => mapUpdate(docSnap, "updates")),
-          ...legacyUpdatesSnap.docs.map((docSnap) => mapUpdate(docSnap, "serviceUpdates")),
-        ].sort((a, b) => (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0));
-
-        const filtered = mapped.filter((item) => {
-          if (item.source !== "updates") return true;
-          const hasNote = typeof item.note === "string" && item.note.trim().length > 0;
-          const hasItems = Array.isArray(item.items) && item.items.length > 0;
-          return hasNote || hasItems;
-        });
-
-        if (!cancelledRef?.current) setUpdates(filtered);
-      } catch (error) {
-        console.error("[servicos/:id] Falha ao carregar histórico", error);
-        if (!cancelledRef?.current) toast.error("Não foi possível carregar o histórico de atualizações.");
-      } finally {
-        if (!cancelledRef?.current) setUpdatesLoading(false);
-      }
-    },
-    [firestore, isAuthReady, serviceId],
-  );
-
-  useEffect(() => {
-    if (!firestore || !isAuthReady) return;
-    setLoadingPackages(true);
-    getDocs(query(collection(firestore, "packages"), orderBy("nome", "asc")))
-      .then((snapshot) => {
-        const result: PackageOption[] = snapshot.docs.map((docSnap) => {
-          const data = docSnap.data() ?? {};
-          return { id: docSnap.id, nome: String(data.nome ?? data.name ?? "") };
-        });
-        setPackages(result);
-      })
-      .catch((error) => {
-        console.error("[servicos/:id] Falha ao carregar pacotes", error);
-        const errorCode =
-          typeof error === "object" && error !== null && "code" in error && typeof (error as { code?: unknown }).code === "string"
-            ? ((error as { code: string }).code)
-            : null;
-        if (errorCode === "permission-denied") {
-          toast.error("Você não tem permissão para ver os pacotes disponíveis.");
-        } else {
-          toast.error("Não foi possível carregar os pacotes disponíveis.");
-        }
-      })
-      .finally(() => setLoadingPackages(false));
-  }, [firestore, isAuthReady]);
-
-  useEffect(() => {
-    if (!firestore || !isAuthReady) return;
-    const cancelledRef = { current: false };
-    refreshUpdates({ cancelledRef }).catch((error) => {
-      console.error("[servicos/:id] Falha ao carregar histórico", error);
+  const applyEditorResponse = useCallback((data: {
+    service: Record<string, unknown>;
+    packages: Array<{ id: string; name: string }>;
+    updates: Array<Record<string, unknown>>;
+  }) => {
+    const service = data.service;
+    setPackages(data.packages.map((item) => ({ id: item.id, nome: item.name })));
+    setForm({
+      os: String(service.os ?? ""),
+      cnpj: typeof service.cnpj === "string" ? maskCnpjInput(service.cnpj) : "",
+      oc: String(service.oc ?? ""),
+      tag: String(service.tag ?? ""),
+      equipamento: String(service.equipment_name ?? ""),
+      setor: String(service.sector ?? ""),
+      dataInicio: toDateInput(service.planned_start),
+      dataFim: toDateInput(service.planned_end),
+      horasPrevistas: service.total_hours ? String(service.total_hours) : "",
+      empresaId: String(service.company_name ?? service.company_id ?? ""),
+      status: toFormStatus(service.status),
+      pacoteId: String(service.package_id ?? ""),
     });
+    let checklistData: unknown[] = [];
+    try { checklistData = JSON.parse(String(service.checklist_json ?? "[]")) as unknown[]; } catch { checklistData = []; }
+    setChecklist(checklistData.map((item, index) => normaliseChecklistEntry(item, index)));
+    setWithChecklist(checklistData.length > 0);
+    setAndamento(Number(service.progress ?? 0));
+    setUpdates(data.updates.map((row) => {
+      let payload: Record<string, unknown> = {};
+      try { payload = JSON.parse(String(row.payload_json ?? "{}")) as Record<string, unknown>; } catch { payload = {}; }
+      const timestamp = Number(row.report_date ?? row.created_at);
+      return {
+        id: String(row.id),
+        date: Number.isFinite(timestamp) ? new Date(timestamp) : null,
+        note: typeof row.description === "string" ? row.description : undefined,
+        totalPct: typeof row.real_percent === "number" ? row.real_percent : undefined,
+        items: Array.isArray(payload.items) ? payload.items as Array<{ itemId: string; pct: number }> : undefined,
+        source: "updates" as const,
+      };
+    }));
+  }, []);
 
-    let cancelled = false;
-
-    async function load() {
-      setLoading(true);
-      try {
-        const ref = doc(firestore, "services", serviceId);
-        const snap = await getDoc(ref);
-        if (!snap.exists()) {
-          toast.error("Serviço não encontrado.");
-          return;
-        }
-        if (cancelled) return;
-
-        const data = snap.data() ?? {};
-        const rawCnpj = typeof data.cnpj === "string" ? data.cnpj : "";
-        setForm({
-          os: String(data.os ?? ""),
-          cnpj: rawCnpj ? maskCnpjInput(rawCnpj) : "",
-          oc: String(data.oc ?? ""),
-          tag: String(data.tag ?? ""),
-          equipamento: String(data.equipamento ?? data.equipmentName ?? ""),
-          setor: String(data.setor ?? ""),
-          dataInicio: toDateInput(data.inicioPrevisto),
-          dataFim: toDateInput(data.fimPrevisto),
-          horasPrevistas: data.horasPrevistas ? String(data.horasPrevistas) : "",
-          empresaId: String(data.empresaId ?? data.company ?? ""),
-          status: toFormStatus(data.status),
-          pacoteId: String(data.pacoteId ?? data.packageId ?? ""),
-        });
-        const checklistData = Array.isArray(data.checklist) ? data.checklist : [];
-        setChecklist(checklistData.map((item, index) => normaliseChecklistEntry(item, index)));
-        setWithChecklist(checklistData.length > 0);
-        // Priorizar realPercentSnapshot (valor mais recente lançado pelo terceiro)
-        const resolvedProgress = Number(
-          data.realPercentSnapshot ??
-          data.manualPercent ??
-          data.realPercent ??
-          data.andamento ??
-          0
-        );
-        setAndamento(resolvedProgress);
-        const prevProgressValue = Number(data.previousProgress ?? data.progressBeforeConclusion ?? data.previousPercent ?? NaN);
-        setPreviousProgress(Number.isFinite(prevProgressValue) ? prevProgressValue : null);
-        await refreshUpdates({ cancelledRef: { current: cancelled } });
-      } catch (error) {
-        console.error("[servicos/:id] Falha ao carregar serviço", error);
-        toast.error("Não foi possível carregar os dados do serviço.");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+  const loadEditor = useCallback(async () => {
+    if (!isAuthReady || !user) return;
+    setLoading(true);
+    setLoadingPackages(true);
+    setUpdatesLoading(true);
+    try {
+      const response = await authenticatedFetch(`/api/pcm/servicos/${encodeURIComponent(serviceId)}`);
+      const data = await response.json() as { ok?: boolean; error?: string; service: Record<string, unknown>; packages: Array<{ id: string; name: string }>; updates: Array<Record<string, unknown>> };
+      if (!response.ok) throw new Error(data.error ?? `Falha ao carregar (${response.status})`);
+      applyEditorResponse(data);
+    } catch (error) {
+      console.error("[servicos/:id] Falha ao carregar editor D1", error);
+      toast.error("Não foi possível carregar os dados do serviço.");
+    } finally {
+      setLoading(false);
+      setLoadingPackages(false);
+      setUpdatesLoading(false);
     }
+  }, [applyEditorResponse, authenticatedFetch, isAuthReady, serviceId, user]);
 
-    void load();
-
-    return () => {
-      cancelled = true;
-      cancelledRef.current = true;
-    };
-  }, [firestore, isAuthReady, refreshUpdates, serviceId]);
+  useEffect(() => { void loadEditor(); }, [loadEditor]);
 
   const startEditingUpdate = useCallback((update: UpdateHistoryItem) => {
     setEditingUpdateId(update.id);
@@ -427,86 +245,32 @@ export default function ServiceEditorClient({ serviceId }: ServiceEditorClientPr
   }, []);
 
   const saveEditingUpdate = useCallback(async () => {
-    if (!firestore || !isAuthReady || !editingUpdateId || !editingUpdateSource) return;
-
+    if (!isAuthReady || !editingUpdateId || !editingUpdateSource) return;
     const parsedDate = parseDateTimeLocal(editDateValue);
-    if (!parsedDate) {
-      toast.error("Informe uma data e hora válidas.");
-      return;
-    }
-
     const parsedPercent = Number(editPercentValue);
-    if (!Number.isFinite(parsedPercent)) {
-      toast.error("Informe um percentual válido entre 0 e 100.");
+    if (!parsedDate || !Number.isFinite(parsedPercent) || parsedPercent < 0 || parsedPercent > 100) {
+      toast.error("Informe data, hora e percentual válidos entre 0 e 100.");
       return;
     }
-    const clampedPercent = Math.max(0, Math.min(100, parsedPercent));
-
     setSavingUpdateEdit(true);
     try {
-      const baseRef = doc(firestore, "services", serviceId);
-      const collectionName = editingUpdateSource === "updates" ? "updates" : "serviceUpdates";
-      const ref = doc(baseRef, collectionName, editingUpdateId);
-
-      // Preservar a data real do lançamento editado. Não forçar "agora" para
-      // evitar que uma correção histórica vire um ponto novo na curva do pacote.
-      const payload: Record<string, unknown> = {
-        updatedAt: serverTimestamp(),
-      };
-
-      if (editingUpdateSource === "updates") {
-        payload.createdAt = serverTimestamp();
-        payload.date = Timestamp.fromDate(parsedDate);
-        payload.reportDate = Timestamp.fromDate(parsedDate);
-        payload.realPercentSnapshot = clampedPercent;
-        payload.manualPercent = clampedPercent;
-        payload.percent = clampedPercent;
-      } else {
-        payload.date = Timestamp.fromDate(parsedDate);
-        payload.reportDate = Timestamp.fromDate(parsedDate);
-        payload.totalPct = clampedPercent;
-      }
-
-      await updateDoc(ref, payload);
-      
-      // Atualizar o realPercentSnapshot no documento do serviço principal diretamente
-      // para garantir que o valor editado seja usado como porcentagem global
-      // IMPORTANTE: Não chamamos recomputeProgressAfterEdit aqui porque ele recalcula
-      // baseado nos updates e pode sobrescrever o realPercentSnapshot que acabamos de definir.
-      // Como estamos atualizando o realPercentSnapshot diretamente, não precisamos recalcular.
-      const servicePayload: Record<string, unknown> = {
-        realPercentSnapshot: clampedPercent,
-        manualPercent: clampedPercent,
-        realPercent: clampedPercent,
-        andamento: clampedPercent,
-        progress: clampedPercent,
-        updatedAt: serverTimestamp(),
-      };
-      await updateDoc(baseRef, servicePayload);
-      
-      // Atualizar o estado local para refletir a mudança imediatamente
-      setAndamento(clampedPercent);
-      
-      toast.success("Lançamento atualizado com sucesso.");
-      await refreshUpdates();
+      const response = await authenticatedFetch(
+        `/api/pcm/servicos/${encodeURIComponent(serviceId)}/updates/${encodeURIComponent(editingUpdateId)}`,
+        { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reportDate: parsedDate.getTime(), percent: parsedPercent }) },
+      );
+      const data = await response.json() as { error?: string; progress?: number };
+      if (!response.ok) throw new Error(data.error ?? "Falha ao atualizar lançamento");
+      setAndamento(data.progress ?? parsedPercent);
+      setUpdates((current) => current.map((item) => item.id === editingUpdateId
+        ? { ...item, date: parsedDate, totalPct: parsedPercent }
+        : item));
       cancelEditingUpdate();
+      toast.success("Lançamento atualizado com sucesso.");
     } catch (error) {
-      console.error("[servicos/:id] Falha ao alterar lançamento do terceiro", error);
+      console.error("[servicos/:id] Falha ao alterar lançamento", error);
       toast.error("Não foi possível alterar o lançamento.");
-    } finally {
-      setSavingUpdateEdit(false);
-    }
-  }, [
-    cancelEditingUpdate,
-    editDateValue,
-    editPercentValue,
-    editingUpdateId,
-    firestore,
-    isAuthReady,
-    recomputeProgressAfterEdit,
-    refreshUpdates,
-    serviceId,
-  ]);
+    } finally { setSavingUpdateEdit(false); }
+  }, [authenticatedFetch, cancelEditingUpdate, editDateValue, editPercentValue, editingUpdateId, editingUpdateSource, isAuthReady, serviceId]);
 
   function updateForm<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -555,114 +319,56 @@ export default function ServiceEditorClient({ serviceId }: ServiceEditorClientPr
       return;
     }
 
-    if (!firestore) {
-      toast.error("Banco de dados indisponível.");
-      return;
-    }
     if (!isAuthReady) {
       toast.error("Sua sessão segura ainda não foi confirmada. Aguarde ou faça login novamente.");
       return;
     }
-
     setSaving(true);
     try {
-      const ref = doc(firestore, "services", serviceId);
-      const payload = {
-        os: form.os.trim(),
-        oc: form.oc.trim() || null,
-        tag: form.tag.trim(),
-        equipamento: form.equipamento.trim(),
-        equipmentName: form.equipamento.trim(),
-        setor: form.setor.trim() || null,
-        inicioPrevisto: Timestamp.fromMillis(inicioMillis),
-        fimPrevisto: Timestamp.fromMillis(fimMillis),
-        horasPrevistas: horas,
-        empresaId: form.empresaId.trim() || null,
-        company: form.empresaId.trim() || null,
-        cnpj: form.cnpj.trim() || null,
-        status: form.status,
-        pacoteId: form.pacoteId || null,
-        packageId: form.pacoteId || null,
-        checklist: withChecklist
-          ? checklist.map((item) => ({
-              id: item.id,
-              descricao: item.descricao.trim(),
-              peso: Math.max(0, Math.min(100, Number(item.peso) || 0)),
-            }))
-          : [],
-        updatedAt: serverTimestamp(),
-      };
-      await updateDoc(ref, payload);
-      await recomputeProgressAfterEdit();
+      const status = form.status === "Concluído" ? "concluded" : form.status === "Pendente" ? "pending" : "open";
+      const response = await authenticatedFetch(`/api/pcm/servicos/${encodeURIComponent(serviceId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          os: form.os.trim(), oc: form.oc.trim() || null, tag: form.tag.trim(),
+          equipmentName: form.equipamento.trim(), sector: form.setor.trim() || null,
+          plannedStart: inicioMillis, plannedEnd: fimMillis, totalHours: horas,
+          companyId: form.empresaId.trim() || null, companyName: form.empresaId.trim() || null,
+          cnpj: form.cnpj.trim() || null, status, packageId: form.pacoteId || null,
+          checklist: withChecklist ? checklist.map((item) => ({
+            id: item.id, description: item.descricao.trim(), weight: Math.max(0, Math.min(100, Number(item.peso) || 0)),
+          })) : [],
+        }),
+      });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "Falha ao salvar");
       toast.success("Serviço atualizado com sucesso.");
       router.push(`/servicos/${encodeURIComponent(serviceId)}`);
     } catch (error) {
       console.error("[servicos/:id] Falha ao salvar", error);
       toast.error("Não foi possível salvar as alterações.");
-    } finally {
-      setSaving(false);
+    } finally { setSaving(false); }
     }
-  }
 
   async function changeStatus(status: (typeof STATUS_OPTIONS)[number], progresso?: number) {
-    if (!firestore) {
-      toast.error("Banco de dados indisponível.");
-      return;
-    }
-    if (!isAuthReady) {
-      toast.error("Sua sessão segura ainda não foi confirmada. Aguarde ou faça login novamente.");
-      return;
-    }
+    if (!isAuthReady) return;
     setSaving(true);
     try {
-      const ref = doc(firestore, "services", serviceId);
-      const payload: Record<string, unknown> = {
-        status,
-        updatedAt: serverTimestamp(),
-      };
-      let nextProgress: number | null = null;
-      const clamp = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
-      const currentProgress = Number.isFinite(andamento) ? clamp(andamento) : 0;
-
-      if (status === "Concluído") {
-        const snapshot = snapshotBeforeConclusion(currentProgress, previousProgress);
-        payload.previousProgress = snapshot;
-        payload.andamento = 100;
-        nextProgress = 100;
-        setPreviousProgress(snapshot);
-        recordTelemetry("service.progress.snapshot", { serviceId, progress: snapshot });
-      } else if (status === "Pendente") {
-        const history = updates
-          .map((item) => (typeof item.totalPct === "number" ? item.totalPct : null))
-          .filter((value): value is number => Number.isFinite(value ?? NaN));
-        const target = resolveReopenedProgress({
-          requested: typeof progresso === "number" ? progresso : null,
-          previousStored: previousProgress,
-          history,
-          current: andamento,
-        });
-        payload.andamento = target;
-        payload.previousProgress = target;
-        nextProgress = target;
-        setPreviousProgress(target);
-        recordTelemetry("service.progress.restore", { serviceId, restored: target });
-      } else if (typeof progresso === "number" && Number.isFinite(progresso)) {
-        payload.andamento = clamp(progresso);
-        nextProgress = clamp(progresso);
-      }
-
-      await updateDoc(ref, payload);
-      setForm((prev) => ({ ...prev, status }));
-      if (nextProgress !== null) {
-        setAndamento(nextProgress);
-      }
+      const canonical = status === "Concluído" ? "concluded" : status === "Pendente" ? "pending" : "open";
+      const body: { status: string; progress?: number } = { status: canonical };
+      if (typeof progresso === "number" && Number.isFinite(progresso)) body.progress = Math.max(0, Math.min(100, progresso));
+      const response = await authenticatedFetch(`/api/pcm/servicos/${encodeURIComponent(serviceId)}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const data = await response.json() as { error?: string; progress?: number };
+      if (!response.ok) throw new Error(data.error ?? "Falha ao alterar status");
+      setForm((previous) => ({ ...previous, status }));
+      if (typeof data.progress === "number") setAndamento(data.progress);
       toast.success("Status atualizado.");
     } catch (error) {
       console.error("[servicos/:id] Falha ao alterar status", error);
       toast.error("Não foi possível alterar o status.");
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   }
 
   if (!isAuthReady) {
@@ -670,16 +376,6 @@ export default function ServiceEditorClient({ serviceId }: ServiceEditorClientPr
       <div className="grid gap-6">
         <div className="rounded-2xl border bg-amber-50 p-6 text-sm text-amber-700 shadow-sm">
           {authIssue ?? "Sincronizando sessão segura. Aguarde..."}
-        </div>
-      </div>
-    );
-  }
-
-  if (!firestore) {
-    return (
-      <div className="grid gap-6">
-        <div className="rounded-2xl border bg-card/80 p-6 text-sm text-amber-600 shadow-sm">
-          Não foi possível carregar o banco de dados. Verifique a configuração do Firebase.
         </div>
       </div>
     );

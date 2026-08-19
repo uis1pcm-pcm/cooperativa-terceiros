@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 
 import { PublicAccessError, fetchServiceChecklist, requireServiceAccess } from "@/lib/public-access";
 import { listUpdates } from "@/lib/repo/services";
-import { AdminDbUnavailableError } from "@/lib/serverDb";
-import { mapFirestoreError } from "@/lib/utils/firestoreErrors";
+import { DatabaseUnavailableError } from "@/lib/databaseUnavailable";
+import { mapDatabaseError } from "@/lib/utils/databaseErrors";
 
 const HISTORY_LIMIT = 20;
 
@@ -48,17 +48,17 @@ export async function GET(req: Request) {
       return NextResponse.json({ ok: false, error: err.message }, { status: err.status });
     }
 
-    if (err instanceof AdminDbUnavailableError || (err instanceof Error && err.message === "FIREBASE_ADMIN_NOT_CONFIGURED")) {
-      console.error("[api/public/service] Firebase Admin não configurado", err);
+    if (err instanceof DatabaseUnavailableError) {
+      console.error("[api/public/service] Banco D1 indisponível", err);
       return NextResponse.json(
         { ok: false, error: "Configuração de acesso ao banco indisponível." },
         { status: 500 },
       );
     }
 
-    const mapped = mapFirestoreError(err);
+    const mapped = mapDatabaseError(err);
     if (mapped) {
-      console.warn("[api/public/service] Falha de acesso ao Firestore", err);
+      console.warn("[api/public/service] Falha de acesso ao banco", err);
       return NextResponse.json({ ok: false, error: mapped.message }, { status: mapped.status });
     }
 

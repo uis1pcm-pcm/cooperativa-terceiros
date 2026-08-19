@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
 
 import { requirePcmUser } from "@/app/api/management/tokens/_lib/auth";
 import { decodeRouteParam } from "@/lib/decodeRouteParam";
 import { normalizeCnpj } from "@/lib/cnpj";
 import { excelDateNumberToMillis, parseXlsxTable } from "@/lib/xlsxParser";
-import { getAdmin } from "@/lib/firebaseAdmin";
+import { getD1 } from "@/lib/d1/runtime";
 import { buildServiceImportKey, createService, findServicesByImportKeys } from "@/lib/repo/services";
 import { ensureServiceAccessToken } from "@/lib/repo/accessTokens";
 import { createPackageFolder, listPackageFolders, setFolderServices } from "@/lib/repo/folders";
@@ -170,7 +169,6 @@ export async function POST(req: Request, ctx: { params: { packageId: string } })
       foldersCreated += 1;
     }
 
-    const db = getAdmin().db;
     let created = 0;
     const createdServiceIdsByFolder = new Map<string, string[]>();
     for (const row of parsedRows) {
@@ -183,7 +181,7 @@ export async function POST(req: Request, ctx: { params: { packageId: string } })
       }
       const folder = folderByCompanyKey.get(normaliseCompanyName(row.empresa).key);
       try {
-        const created = await createService({
+        const createdService = await createService({
           os: row.os,
           oc: row.oc,
           tag: row.tag,
@@ -200,29 +198,15 @@ export async function POST(req: Request, ctx: { params: { packageId: string } })
           description: row.descricao,
           importKey: row.importKey,
         });
-        const createdRef = db.collection("services").doc(created.id);
-        await createdRef.set({
-          empresa: row.empresa,
-          company: row.empresa,
-          companyId: row.empresa,
-          empresaId: row.empresa,
-          descricao: row.descricao,
-          packageId,
-          pacoteId: packageId,
-          folderId: folder?.id ?? null,
-          subpackageId: folder?.id ?? null,
-          inicioPrevisto: Timestamp.fromMillis(row.dataInicioPrevista),
-          fimPrevisto: Timestamp.fromMillis(row.dataFimPrevista),
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true });
+        await getD1().prepare("UPDATE services SET package_id=?1,updated_at=?2 WHERE id=?3").bind(packageId,Date.now(),createdService.id).run();
         if (folder?.id) {
           const list = createdServiceIdsByFolder.get(folder.id) ?? [];
-          list.push(created.id);
+          list.push(createdService.id);
           createdServiceIdsByFolder.set(folder.id, list);
         }
         try {
           await ensureServiceAccessToken({
-            serviceId: created.id,
+            serviceId: createdService.id,
             company: row.empresa || undefined,
           });
         } catch (tokenError) {

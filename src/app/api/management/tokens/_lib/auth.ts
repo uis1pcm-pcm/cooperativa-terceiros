@@ -52,7 +52,7 @@ export async function requirePcmUser(req: Request): Promise<AuthenticatedUser> {
       console.error("[requirePcmUser] Falha ao verificar token com Firebase Admin", err);
     }
   } else {
-    console.warn("[requirePcmUser] Firebase Admin não configurado. Utilizando fallback Identity Toolkit.");
+    console.warn("[requirePcmUser] Banco D1 indisponível. Utilizando fallback Identity Toolkit.");
   }
 
   const fallback = await verifyFirebaseIdToken(bearerToken);

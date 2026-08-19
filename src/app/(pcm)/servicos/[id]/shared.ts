@@ -11,11 +11,9 @@ import type {
   Service,
   ServiceUpdate,
 } from "@/lib/types";
-import type {
-  DocumentData,
-  DocumentSnapshot,
-  QueryDocumentSnapshot,
-} from "firebase/firestore";
+type DocumentSnapshot<T=Record<string,unknown>>={id:string;exists():boolean;data():T|undefined;ref:{parent:{parent?:{id:string}|null}}};
+type QueryDocumentSnapshot<T=Record<string,unknown>>=DocumentSnapshot<T>;
+type DocumentData=Record<string,unknown>;
 
 export type ServiceRealtimeData = {
   id: string;
@@ -48,13 +46,13 @@ export type ServiceRealtimeData = {
 
 type PlannedPoint = { date: string; percent: number; hoursAccum?: number };
 
-type FirestoreLikeTimestamp = { toMillis?: () => number } | { seconds?: number; nanoseconds?: number };
+type LegacyTimestamp = { toMillis?: () => number } | { seconds?: number; nanoseconds?: number };
 
 type ServiceRecord = Record<string, unknown>;
 
 const DEFAULT_TIME_ZONE = "America/Sao_Paulo";
 
-type FirestoreAudit = {
+type UpdateAudit = {
   submittedBy?: string | null;
   submittedByType?: "token" | "user" | "system" | string | null;
   submittedAt?: unknown;
@@ -84,7 +82,7 @@ export function toMillis(value: unknown): number | null {
     return Number.isNaN(time) ? null : time;
   }
   if (typeof value === "object") {
-    const maybe = value as FirestoreLikeTimestamp & { toDate?: () => Date };
+    const maybe = value as LegacyTimestamp & { toDate?: () => Date };
     if (typeof maybe?.toMillis === "function") {
       const millis = maybe.toMillis();
       if (typeof millis === "number" && Number.isFinite(millis)) {
@@ -408,7 +406,7 @@ function mapEvidences(raw: unknown): ServiceUpdate["evidences"] {
 
 function mapAudit(raw: unknown): ServiceUpdate["audit"] {
   if (!raw || typeof raw !== "object") return undefined;
-  const record = raw as FirestoreAudit;
+  const record = raw as UpdateAudit;
   const submittedByType = (() => {
     if (typeof record.submittedByType !== "string") return undefined;
     const normalized = record.submittedByType.trim().toLowerCase();

@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
-import { getFirestore } from "firebase-admin/firestore";
-
-import { getAdminApp } from "@/lib/firebaseAdmin";
+import { getD1 } from "@/lib/d1/runtime";
 import { HttpError, requirePcmUser } from "../_lib/auth";
 
 type DeactivateBody = {
@@ -22,19 +20,12 @@ export async function POST(req: Request) {
     const body = (await req.json().catch(() => ({}))) as DeactivateBody;
     const token = parseBody(body);
 
-    const app = getAdminApp();
-    if (!app) {
-      return NextResponse.json({ error: "Firebase Admin indisponível" }, { status: 503 });
-    }
-
-    const db = getFirestore(app);
-    const ref = db.collection("accessTokens").doc(token);
-    const snap = await ref.get();
-    if (!snap.exists) {
+    const found=await getD1().prepare("SELECT token_code FROM access_tokens WHERE token_code=?1").bind(token).first();
+    if (!found) {
       throw new HttpError(404, "Token não encontrado");
     }
 
-    await ref.update({ active: false });
+    await getD1().prepare("UPDATE access_tokens SET active=0,status='revoked',updated_at=?1 WHERE token_code=?2").bind(Date.now(),token).run();
 
     return NextResponse.json({ ok: true });
   } catch (err: unknown) {

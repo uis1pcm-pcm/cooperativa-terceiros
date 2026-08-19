@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 
 import { getTokenCookie } from "@/lib/tokenSession";
 import { getServicesForToken, getTokenDoc } from "@/lib/terceiroService";
-import { AdminDbUnavailableError } from "@/lib/serverDb";
-import { mapFirestoreError } from "@/lib/utils/firestoreErrors";
+import { DatabaseUnavailableError } from "@/lib/databaseUnavailable";
+import { mapDatabaseError } from "@/lib/utils/databaseErrors";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -30,12 +30,12 @@ export async function GET() {
 
     return NextResponse.json({ ok: true, companyId, services });
   } catch (error) {
-    if (error instanceof AdminDbUnavailableError || (error instanceof Error && error.message === "FIREBASE_ADMIN_NOT_CONFIGURED")) {
-      console.error("[api/terceiro/session] Firebase Admin não configurado", error);
+    if (error instanceof DatabaseUnavailableError) {
+      console.error("[api/terceiro/session] Banco D1 indisponível", error);
       return NextResponse.json({ ok: false, error: "Configuração de acesso ao banco indisponível." }, { status: 500 });
     }
 
-    const mapped = mapFirestoreError(error);
+    const mapped = mapDatabaseError(error);
     if (mapped) {
       console.warn("[api/terceiro/session] Falha ao consultar dados", error);
       return NextResponse.json({ ok: false, error: mapped.message }, { status: mapped.status });

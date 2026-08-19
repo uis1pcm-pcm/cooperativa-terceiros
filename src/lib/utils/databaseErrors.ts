@@ -1,4 +1,4 @@
-export type FirestoreErrorInfo = {
+export type DatabaseErrorInfo = {
   status: number;
   message: string;
 };
@@ -12,7 +12,7 @@ function extractErrorCode(error: unknown): string | null {
   return null;
 }
 
-export function mapFirestoreError(error: unknown): FirestoreErrorInfo | null {
+export function mapDatabaseError(error: unknown): DatabaseErrorInfo | null {
   const code = extractErrorCode(error);
   if (code === "permission-denied") {
     return { status: 403, message: "Sem permissão para acessar este recurso." };

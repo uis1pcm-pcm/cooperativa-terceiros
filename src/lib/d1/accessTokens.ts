@@ -1,0 +1,3 @@
+import type { D1Database } from "./types";
+const fields="token_code,target_type,target_id,company_id,package_id,active,status,expires_at,one_time,created_at,updated_at";
+export class AccessTokensRepository { constructor(private readonly db:D1Database){} getActive(code:string,now=Date.now()){return this.db.prepare(`SELECT ${fields} FROM access_tokens WHERE token_code=?1 AND active=1 AND (expires_at IS NULL OR expires_at>?2) LIMIT 1`).bind(code.trim().toUpperCase(),now).first();} byTarget(type:string,id:string){return this.db.prepare(`SELECT ${fields} FROM access_tokens WHERE target_type=?1 AND target_id=?2 AND active=1 ORDER BY created_at DESC LIMIT 200`).bind(type,id).all();} }

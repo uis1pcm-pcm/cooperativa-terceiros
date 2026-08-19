@@ -4,8 +4,8 @@ export const revalidate = 0;
 import ServiceDetailsClient from "@/components/ServiceDetailsClient";
 import { requireServiceAccess } from "@/lib/public-access";
 import { fetchThirdService, fetchThirdServiceChecklist, fetchThirdServiceUpdates } from "@/lib/thirdServiceData";
-import { AdminDbUnavailableError } from "@/lib/serverDb";
-import { mapFirestoreError } from "@/lib/utils/firestoreErrors";
+import { DatabaseUnavailableError } from "@/lib/databaseUnavailable";
+import { mapDatabaseError } from "@/lib/utils/databaseErrors";
 
 export default async function ServicePage({
   params,
@@ -54,12 +54,12 @@ export default async function ServicePage({
       <ServiceDetailsClient service={{ ...service, hasChecklist }} updates={updates} checklist={checklist} token={token} />
     );
   } catch (error) {
-    if (error instanceof AdminDbUnavailableError || (error instanceof Error && error.message === "FIREBASE_ADMIN_NOT_CONFIGURED")) {
-      console.error(`[public/s/${params.serviceId}] Firebase Admin não configurado`, error);
+    if (error instanceof DatabaseUnavailableError) {
+      console.error(`[public/s/${params.serviceId}] Banco D1 indisponível`, error);
       return <div className="card p-6">Configuração de acesso ao banco indisponível.</div>;
     }
 
-    const mapped = mapFirestoreError(error);
+    const mapped = mapDatabaseError(error);
     if (mapped) {
       console.warn(`[public/s/${params.serviceId}] Falha ao carregar serviço`, error);
       const message = mapped.status === 404 ? "Serviço não encontrado." : mapped.message;
