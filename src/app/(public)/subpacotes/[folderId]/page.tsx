@@ -7,8 +7,8 @@ import Link from "next/link";
 import { requireFolderAccess } from "@/lib/public-access";
 import type { Service } from "@/lib/types";
 import { formatDate } from "@/lib/formatDateTime";
-import { AdminDbUnavailableError } from "@/lib/serverDb";
-import { mapFirestoreError } from "@/lib/utils/firestoreErrors";
+import { DatabaseUnavailableError } from "@/lib/databaseUnavailable";
+import { mapDatabaseError } from "@/lib/utils/databaseErrors";
 
 function normaliseStatus(value?: string | null): string {
   const raw = String(value ?? "").trim().toLowerCase();
@@ -195,12 +195,12 @@ export default async function FolderPublicPage({
       return <div className="card p-6">{status === 404 ? "Subpacote não encontrado." : message}</div>;
     }
 
-    if (error instanceof AdminDbUnavailableError || (error instanceof Error && error.message === "FIREBASE_ADMIN_NOT_CONFIGURED")) {
-      console.error(`[public/subpacotes/${params.folderId}] Firebase Admin não configurado`, error);
+    if (error instanceof DatabaseUnavailableError) {
+      console.error(`[public/subpacotes/${params.folderId}] Banco D1 indisponível`, error);
       return <div className="card p-6">Configuração de acesso ao banco indisponível.</div>;
     }
 
-    const mapped = mapFirestoreError(error);
+    const mapped = mapDatabaseError(error);
     if (mapped) {
       console.warn(`[public/subpacotes/${params.folderId}] Falha ao carregar subpacote`, error);
       const message = mapped.status === 404 ? "Subpacote não encontrado." : mapped.message;

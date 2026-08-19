@@ -86,7 +86,7 @@ export async function POST(req: Request) {
 
   const app = getAdminApp();
   if (!app || adminAuthUnavailable) {
-    console.error("[pcm-session] Firebase Admin não configurado — usando fallback");
+    console.error("[pcm-session] Banco D1 indisponível — usando fallback");
     return handleFallback(trimmedToken);
   }
 

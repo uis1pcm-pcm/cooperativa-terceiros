@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 
 import { PublicAccessError, requireServiceAccess } from "@/lib/public-access";
 import { addManualUpdate } from "@/lib/repo/services";
-import { mapFirestoreError } from "@/lib/utils/firestoreErrors";
+import { mapDatabaseError } from "@/lib/utils/databaseErrors";
 import { parseDayFirstDateStringToUtcDate, parsePortugueseDateStringToUtcDate } from "@/lib/dateParsing";
 
 const SHIFT_VALUES = new Set(["manha", "tarde", "noite"]);
@@ -228,9 +228,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: err.message }, { status: err.status });
     }
 
-    const firestoreError = mapFirestoreError(err);
-    if (firestoreError) {
-      return NextResponse.json({ ok: false, error: firestoreError.message }, { status: firestoreError.status });
+    const databaseError = mapDatabaseError(err);
+    if (databaseError) {
+      return NextResponse.json({ ok: false, error: databaseError.message }, { status: databaseError.status });
     }
 
     if (err instanceof Error && err.message.includes("Serviço não encontrado")) {

@@ -1,92 +1,53 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { dbState } = vi.hoisted(() => ({
-  dbState: {
-    accessTokens: new Map<string, Record<string, unknown>>(),
-    packageFolders: new Map<string, Record<string, unknown>>(),
-    services: new Map<string, Record<string, unknown>>(),
-  },
-}));
+const { state } = vi.hoisted(() => ({ state: {
+  tokens: new Map<string, Record<string, unknown>>(),
+  folders: new Map<string, Record<string, unknown>>(),
+  services: new Map<string, Record<string, unknown>>(),
+} }));
 
-vi.mock("@/lib/firebaseAdmin", () => ({
-  getAdmin: () => ({
-    db: {
-      collection: (name: keyof typeof dbState) => ({
-        doc: (id: string) => ({
-          get: async () => {
-            const data = dbState[name].get(id);
-            return {
-              id,
-              exists: Boolean(data),
-              data: () => data,
-            };
-          },
-          collection: () => ({
-            orderBy: () => ({
-              get: async () => ({ docs: [] }),
-            }),
-          }),
-        }),
-      }),
+vi.mock("@/lib/d1/runtime", () => ({ getD1: () => ({
+  prepare: (sql: string) => ({
+    values: [] as unknown[],
+    bind(...values: unknown[]) { this.values = values; return this; },
+    async first() {
+      if (sql.includes("FROM access_tokens")) return state.tokens.get(String(this.values[0])) ?? null;
+      if (sql.includes("FROM package_folders")) return state.folders.get(String(this.values[0])) ?? null;
+      if (sql.includes("FROM services")) return state.services.get(String(this.values[0])) ?? null;
+      return null;
     },
+    async all() {
+      if (!sql.includes("FROM services")) return { success: true, results: [] };
+      return { success: true, results: this.values.flatMap((id) => {
+        const row = state.services.get(String(id));
+        return row ? [row] : [];
+      }) };
+    },
+    async run() { return { success: true, results: [] }; },
   }),
-}));
+}) }));
 
 import { requireServiceAccess } from "@/lib/public-access";
 
-describe("public access", () => {
-  beforeEach(() => {
-    dbState.accessTokens.clear();
-    dbState.packageFolders.clear();
-    dbState.services.clear();
+const service = (id: string, companyId: string) => ({ id, os: "OS-1", oc: null, code: null, tag: null,
+  equipment_name: null, sector: null, planned_start: 1, planned_end: 2, total_hours: 10, description: null,
+  status: "open", progress: 0, company_id: companyId, company_name: null, cnpj: null, package_id: null,
+  previous_progress: null, has_checklist: 0, checklist_json: "[]", planned_daily_json: null, import_key: null,
+  created_at: 1, updated_at: 1 });
+
+describe("public access D1", () => {
+  beforeEach(() => { state.tokens.clear(); state.folders.clear(); state.services.clear(); });
+
+  it("allows a folder token to access an explicitly linked service", async () => {
+    state.tokens.set("FOLDER-TOKEN", { token_code: "FOLDER-TOKEN", target_type: "folder", target_id: "folder-1", company_id: "empresa-a", package_id: null, active: 1, status: "active", expires_at: null });
+    state.folders.set("folder-1", { id: "folder-1", package_id: "p1", name: "Pasta", company_id: "empresa-a", service_ids_json: '["service-1"]', token_code: "FOLDER-TOKEN", created_at: 1, updated_at: 1, token_created_at: 1 });
+    state.services.set("service-1", service("service-1", "empresa-legada-diferente"));
+    await expect(requireServiceAccess("folder-token", "service-1")).resolves.toMatchObject({ folderId: "folder-1", service: { id: "service-1" } });
   });
 
-  it("permite token de subpacote acessar serviço vinculado mesmo com empresa divergente no serviço", async () => {
-    dbState.accessTokens.set("folder-token", {
-      active: true,
-      targetType: "folder",
-      targetId: "folder-1",
-      folderId: "folder-1",
-      companyId: "empresa-a",
-    });
-    dbState.packageFolders.set("folder-1", {
-      companyId: "empresa-a",
-      services: ["service-1"],
-    });
-    dbState.services.set("service-1", {
-      companyId: "empresa-legada-diferente",
-      os: "OS-1",
-      plannedStart: "2026-08-10",
-      plannedEnd: "2026-08-12",
-      totalHours: 10,
-      status: "aberto",
-    });
-
-    await expect(requireServiceAccess("folder-token", "service-1")).resolves.toMatchObject({
-      folderId: "folder-1",
-      service: { id: "service-1" },
-    });
-  });
-
-  it("mantém validação de empresa para token direto de serviço", async () => {
-    dbState.accessTokens.set("service-token", {
-      active: true,
-      targetType: "service",
-      targetId: "service-1",
-      companyId: "empresa-a",
-    });
-    dbState.services.set("service-1", {
-      companyId: "empresa-b",
-      os: "OS-1",
-      plannedStart: "2026-08-10",
-      plannedEnd: "2026-08-12",
-      totalHours: 10,
-      status: "aberto",
-    });
-
-    await expect(requireServiceAccess("service-token", "service-1")).rejects.toMatchObject({
-      status: 403,
-      message: "Token não possui acesso a este serviço",
-    });
+  it("keeps company validation for direct service tokens", async () => {
+    state.tokens.set("SERVICE-TOKEN", { token_code: "SERVICE-TOKEN", target_type: "service", target_id: "service-1", company_id: "empresa-a", package_id: null, active: 1, status: "active", expires_at: null });
+    state.services.set("service-1", service("service-1", "empresa-b"));
+    await expect(requireServiceAccess("service-token", "service-1")).rejects.toMatchObject({ status: 403, message: "Token não possui acesso a este serviço" });
   });
 });

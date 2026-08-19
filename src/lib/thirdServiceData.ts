@@ -1,7 +1,7 @@
-import { getAdminDbOrThrow } from "@/lib/serverDb";
+import { getD1 } from "@/lib/d1/runtime";
 import type { ThirdChecklistItem, ThirdService, ThirdServiceUpdate } from "@/app/(third)/terceiro/servico/[id]/types";
 
-type FirestoreDateLike = {
+type LegacyDateLike = {
   toMillis?: () => number;
   toDate?: () => Date;
   seconds?: number;
@@ -21,7 +21,7 @@ function toMillis(value: unknown): number | null {
     return Number.isNaN(time) ? null : time;
   }
   if (typeof value === "object" && value) {
-    const maybe = value as FirestoreDateLike;
+    const maybe = value as LegacyDateLike;
     if (maybe?.toMillis) {
       const millis = maybe.toMillis();
       if (typeof millis === "number" && Number.isFinite(millis)) return millis;
@@ -254,17 +254,13 @@ export function mapThirdChecklistItem(data: Record<string, unknown>): ThirdCheck
 }
 
 export async function fetchThirdService(serviceId: string): Promise<ThirdService | null> {
-  const adminDb = getAdminDbOrThrow();
-  const snap = await adminDb.collection("services").doc(serviceId).get();
-  if (!snap.exists) return null;
-  return mapThirdService(snap.id, (snap.data() ?? {}) as Record<string, unknown>);
+  const row=await getD1().prepare("SELECT id,os,oc,code,tag,equipment_name,sector,status,planned_start,planned_end,total_hours,company_id,company_name,cnpj,progress,previous_progress,updated_at,has_checklist FROM services WHERE id=?1").bind(serviceId).first<Record<string,unknown>>();
+  if(!row)return null;return mapThirdService(serviceId,{...row,equipmentName:row.equipment_name,plannedStart:row.planned_start,plannedEnd:row.planned_end,totalHours:row.total_hours,company:row.company_name??row.company_id,realPercent:row.progress,previousProgress:row.previous_progress,updatedAt:row.updated_at,hasChecklist:Boolean(row.has_checklist)});
 }
 
 export async function fetchThirdServiceUpdates(serviceId: string, limitCount: number): Promise<ThirdServiceUpdate[]> {
-  const adminDb = getAdminDbOrThrow();
-  const col = adminDb.collection("services").doc(serviceId).collection("updates");
-  const snap = await col.orderBy("audit.submittedAt", "desc").limit(limitCount).get();
-  return snap.docs.map((doc) => mapThirdUpdate(doc.id, (doc.data() ?? {}) as Record<string, unknown>));
+  const rows=(await getD1().prepare("SELECT id,created_at,report_date,manual_percent,real_percent,description,payload_json FROM service_updates WHERE service_id=?1 ORDER BY created_at DESC,id DESC LIMIT ?2").bind(serviceId,Math.min(limitCount,200)).all<Record<string,unknown>>()).results??[];
+  return rows.map(row=>mapThirdUpdate(String(row.id),{...JSON.parse(String(row.payload_json)),createdAt:row.created_at,reportDate:row.report_date,manualPercent:row.manual_percent,realPercentSnapshot:row.real_percent,description:row.description}));
 }
 
 function mapChecklistArray(raw: unknown): ThirdChecklistItem[] {
@@ -288,11 +284,8 @@ function mapChecklistArray(raw: unknown): ThirdChecklistItem[] {
 
 async function fetchChecklistFromDocument(serviceId: string): Promise<ThirdChecklistItem[]> {
   try {
-    const adminDb = getAdminDbOrThrow();
-    const snap = await adminDb.collection("services").doc(serviceId).get();
-    if (!snap.exists) return [];
-    const data = (snap.data() ?? {}) as Record<string, unknown>;
-    return mapChecklistArray(data.checklist ?? data.checklists ?? data.items);
+    const row=await getD1().prepare("SELECT checklist_json FROM services WHERE id=?1").bind(serviceId).first<{checklist_json:string}>();
+    return row?mapChecklistArray(JSON.parse(row.checklist_json)):[];
   } catch (error) {
     console.warn(`[thirdServiceData] Falha ao carregar checklist embutido de ${serviceId}`, error);
     return [];
@@ -300,14 +293,5 @@ async function fetchChecklistFromDocument(serviceId: string): Promise<ThirdCheck
 }
 
 export async function fetchThirdServiceChecklist(serviceId: string): Promise<ThirdChecklistItem[]> {
-  const adminDb = getAdminDbOrThrow();
-  const col = adminDb.collection("services").doc(serviceId).collection("checklist");
-  const snap = await col.orderBy("description", "asc").get();
-  const items = snap.docs.map((doc) =>
-    mapThirdChecklistItem({ id: doc.id, ...(doc.data() ?? {}) } as Record<string, unknown>),
-  );
-  if (items.length > 0) {
-    return items;
-  }
   return fetchChecklistFromDocument(serviceId);
 }

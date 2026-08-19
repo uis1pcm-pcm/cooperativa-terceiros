@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
-import { Timestamp, getFirestore } from "firebase-admin/firestore";
 import { customAlphabet } from "nanoid";
 
-import { getAdminApp } from "@/lib/firebaseAdmin";
+import { getD1 } from "@/lib/d1/runtime";
 import { HttpError, requirePcmUser } from "../_lib/auth";
 
 const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -28,7 +27,7 @@ function parseBody(body: CreateTokenBody): {
   targetType: "service" | "folder";
   targetId: string;
   company?: string;
-  expiresAt?: Timestamp;
+  expiresAt?: number;
   packageId?: string;
 } {
   const { targetType, targetId, company, expiresAt } = body;
@@ -45,7 +44,7 @@ function parseBody(body: CreateTokenBody): {
     throw new HttpError(400, "company inválida");
   }
 
-  let expiresAtTimestamp: Timestamp | undefined;
+  let expiresAtTimestamp: number | undefined;
   if (expiresAt !== undefined) {
     if (typeof expiresAt !== "string" || !expiresAt.trim()) {
       throw new HttpError(400, "expiresAt deve ser string ISO");
@@ -54,7 +53,7 @@ function parseBody(body: CreateTokenBody): {
     if (Number.isNaN(date.getTime())) {
       throw new HttpError(400, "expiresAt inválido");
     }
-    expiresAtTimestamp = Timestamp.fromDate(date);
+    expiresAtTimestamp = date.getTime();
   }
 
   const companyValue = typeof company === "string" ? company.trim() : undefined;
@@ -76,51 +75,21 @@ function parseBody(body: CreateTokenBody): {
 }
 
 async function persistToken(
-  db: FirebaseFirestore.Firestore,
+  db: ReturnType<typeof getD1>,
   data: {
     targetType: "service" | "folder";
     targetId: string;
     company?: string;
-    expiresAt?: Timestamp;
+    expiresAt?: number;
     packageId?: string;
   },
 ): Promise<string> {
-  const col = db.collection("accessTokens");
-
   for (let attempt = 0; attempt < 5; attempt++) {
     const token = randomLengthToken();
     const normalizedCompany = data.company?.trim();
-    const payload: Record<string, unknown> = {
-      code: token,
-      token,
-      targetType: data.targetType,
-      targetId: data.targetId,
-      active: true,
-      status: "active",
-      createdAt: Timestamp.now(),
-    };
-
-    if (data.expiresAt) payload.expiresAt = data.expiresAt;
-    if (normalizedCompany) {
-      payload.company = normalizedCompany;
-      payload.companyId = normalizedCompany;
-      payload.empresa = normalizedCompany;
-      payload.empresaId = normalizedCompany;
-    }
-
-    if (data.targetType === "service") {
-      payload.serviceId = data.targetId;
-    } else {
-      payload.folderId = data.targetId;
-      payload.pastaId = data.targetId;
-      if (data.packageId) {
-        payload.packageId = data.packageId;
-        payload.pacoteId = data.packageId;
-      }
-    }
-
     try {
-      await col.doc(token).create(payload);
+      const now=Date.now();
+      await db.prepare("INSERT INTO access_tokens(token_code,target_type,target_id,company_id,package_id,active,status,expires_at,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,1,'active',?6,?7,?7)").bind(token,data.targetType,data.targetId,normalizedCompany??null,data.packageId??null,data.expiresAt??null,now).run();
       return token;
     } catch (err: unknown) {
       const error = err as { code?: unknown; details?: unknown; message?: unknown };
@@ -151,14 +120,7 @@ export async function POST(req: Request) {
     const body = (await req.json().catch(() => ({}))) as CreateTokenBody;
     const parsed = parseBody(body);
 
-    const app = getAdminApp();
-    if (!app) {
-      return NextResponse.json({ error: "Firebase Admin indisponível" }, { status: 503 });
-    }
-
-    const db = getFirestore(app);
-
-    const token = await persistToken(db, parsed);
+    const token = await persistToken(getD1(), parsed);
     const link = `/acesso?token=${token}`;
 
     return NextResponse.json({ token, link });

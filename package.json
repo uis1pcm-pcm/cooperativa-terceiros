@@ -11,7 +11,14 @@
     "start": "next start",
     "lint": "node scripts/offline-lint.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "d1:migrate:local": "wrangler d1 migrations apply cooperativa-terceiros --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply cooperativa-terceiros --remote",
+    "d1:import": "node scripts/migrate-firestore-to-d1.mjs",
+    "d1:benchmark": "node scripts/benchmark-d1.mjs",
+    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -33,6 +40,7 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@next/bundle-analyzer": "^15.5.4",
+    "@opennextjs/cloudflare": "^1.6.5",
     "@types/node": "^20.12.12",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

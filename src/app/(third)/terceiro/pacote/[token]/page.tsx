@@ -7,8 +7,8 @@ import { getPackageShareByToken } from "@/lib/repo/packageShares";
 import { getServicesByIds } from "@/lib/repo/services";
 import type { Service } from "@/lib/types";
 import { formatDate } from "@/lib/formatDateTime";
-import { AdminDbUnavailableError } from "@/lib/serverDb";
-import { mapFirestoreError } from "@/lib/utils/firestoreErrors";
+import { DatabaseUnavailableError } from "@/lib/databaseUnavailable";
+import { mapDatabaseError } from "@/lib/utils/databaseErrors";
 
 const DATE_FORMAT_OPTIONS = { timeZone: "America/Sao_Paulo", fallback: "—" } as const;
 
@@ -206,12 +206,12 @@ export default async function TerceiroPacotePublicoPage({ params }: { params: { 
       </div>
     );
   } catch (error) {
-    if (error instanceof AdminDbUnavailableError || (error instanceof Error && error.message === "FIREBASE_ADMIN_NOT_CONFIGURED")) {
-      console.error(`[terceiro/pacote/${token}] Firebase Admin não configurado`, error);
+    if (error instanceof DatabaseUnavailableError) {
+      console.error(`[terceiro/pacote/${token}] Banco D1 indisponível`, error);
       return <div className="card p-6">Configuração de acesso ao banco indisponível.</div>;
     }
 
-    const mapped = mapFirestoreError(error);
+    const mapped = mapDatabaseError(error);
     if (mapped) {
       console.warn(`[terceiro/pacote/${token}] Falha ao carregar compartilhamento`, error);
       const message = mapped.status === 404 ? "Link inválido ou expirado." : mapped.message;

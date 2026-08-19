@@ -2,8 +2,8 @@ import ServiceDetailsClient from "@/components/ServiceDetailsClient";
 import { fetchThirdService, fetchThirdServiceChecklist, fetchThirdServiceUpdates } from "@/lib/thirdServiceData";
 import { getTokenCookie } from "@/lib/tokenSession";
 import { getServicesForToken } from "@/lib/terceiroService";
-import { AdminDbUnavailableError } from "@/lib/serverDb";
-import { mapFirestoreError } from "@/lib/utils/firestoreErrors";
+import { DatabaseUnavailableError } from "@/lib/databaseUnavailable";
+import { mapDatabaseError } from "@/lib/utils/databaseErrors";
 import { unstable_cache } from "next/cache";
 
 async function getThirdServiceBundle(serviceId: string) {
@@ -72,12 +72,12 @@ export default async function TerceiroServicoPage({ params }: { params: { id: st
       />
     );
   } catch (error) {
-    if (error instanceof AdminDbUnavailableError || (error instanceof Error && error.message === "FIREBASE_ADMIN_NOT_CONFIGURED")) {
-      console.error(`[terceiro/${params.id}] Firebase Admin não configurado`, error);
+    if (error instanceof DatabaseUnavailableError) {
+      console.error(`[terceiro/${params.id}] Banco D1 indisponível`, error);
       return <div className="card p-6">Configuração de acesso ao banco indisponível.</div>;
     }
 
-    const mapped = mapFirestoreError(error);
+    const mapped = mapDatabaseError(error);
     if (mapped) {
       console.warn(`[terceiro/${params.id}] Falha ao acessar serviço`, error);
       const message = mapped.status === 404 ? "Serviço não encontrado." : mapped.message;

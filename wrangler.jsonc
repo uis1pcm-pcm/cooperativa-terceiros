@@ -1,7 +1,7 @@
 {
   "name": "cooperativa-terceiros-workers",
   "type": "javascript",
-  "main": "src/index.ts",
+  "main": ".open-next/worker.js",
   "compatibility_date": "2024-12-16",
 
   // R2 Bucket Binding Configuration
@@ -12,6 +12,9 @@
       // Uncomment for testing against real R2 during development
       // "remote": true
     }
+  ],
+  "d1_databases": [
+    { "binding": "DB", "database_name": "cooperativa-terceiros", "database_id": "REPLACE_WITH_D1_DATABASE_ID", "preview_database_id": "REPLACE_WITH_D1_PREVIEW_DATABASE_ID", "migrations_dir": "migrations" }
   ],
 
   // Environment Variables
@@ -48,6 +51,9 @@
           // Use local storage for dev, or uncomment to test with real R2:
           // "remote": true
         }
+      ],
+      "d1_databases": [
+        { "binding": "DB", "database_name": "cooperativa-terceiros-dev", "database_id": "REPLACE_WITH_D1_DEVELOPMENT_DATABASE_ID", "migrations_dir": "migrations" }
       ]
     },
     "production": {
@@ -61,6 +67,9 @@
           "bucket_name": "inspecoes-lar",
           "remote": true
         }
+      ],
+      "d1_databases": [
+        { "binding": "DB", "database_name": "cooperativa-terceiros", "database_id": "REPLACE_WITH_D1_PRODUCTION_DATABASE_ID", "migrations_dir": "migrations" }
       ]
     }
   }

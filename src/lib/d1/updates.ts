@@ -1,0 +1,2 @@
+import type { D1Database } from "./types";
+export class UpdatesRepository { constructor(private readonly db:D1Database){} list(serviceId:string,limit=100){return this.db.prepare("SELECT id,service_id,created_at,report_date,manual_percent,real_percent,description,mode,token_code,previous_percent,payload_json,source FROM service_updates WHERE service_id=?1 ORDER BY created_at DESC,id DESC LIMIT ?2").bind(serviceId,Math.min(limit,200)).all();} }

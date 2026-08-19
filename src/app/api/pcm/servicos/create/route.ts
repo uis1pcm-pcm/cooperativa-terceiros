@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 
-import { createAccessToken } from "@/lib/accessTokens";
 import { normalizeCnpj } from "@/lib/cnpj";
 import { ensureServiceAccessToken } from "@/lib/repo/accessTokens";
 import { createService } from "@/lib/repo/services";
@@ -141,16 +140,7 @@ export async function POST(request: Request) {
         company: validated.empresaId ?? undefined,
       });
     } catch (adminTokenError) {
-      console.error("[api/pcm/servicos/create] Falha ao gerar token via admin", adminTokenError);
-      try {
-        await createAccessToken({
-          serviceId: id,
-          empresa: validated.empresaId ?? undefined,
-          company: validated.empresaId ?? undefined,
-        });
-      } catch (tokenError) {
-        console.error("[api/pcm/servicos/create] Falha ao gerar token (fallback)", tokenError);
-      }
+      console.error("[api/pcm/servicos/create] Serviço criado, mas o token D1 falhou", adminTokenError);
     }
 
     revalidateTag("services:available");
@@ -158,11 +148,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, serviceId: id });
   } catch (error) {
     console.error("[api/pcm/servicos/create] Falha ao criar serviço", error);
-    const message =
-      (error as Error | undefined)?.message === "FIREBASE_ADMIN_NOT_CONFIGURED"
-        ? "Banco de dados não configurado."
-        : "Não foi possível criar o serviço.";
-
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return NextResponse.json({ ok: false, error: "Não foi possível criar o serviço." }, { status: 500 });
   }
 }

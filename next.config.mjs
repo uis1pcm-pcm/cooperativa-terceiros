@@ -10,6 +10,7 @@ const withBundleAnalyzer = bundleAnalyzer({
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  serverExternalPackages: ["@opennextjs/cloudflare"],
   eslint: {
     ignoreDuringBuilds: true,
   },
